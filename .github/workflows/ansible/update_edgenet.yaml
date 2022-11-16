@@ -1,0 +1,68 @@
+---
+-
+  name: Update Woop Chain binary
+  hosts:
+    - all
+  become: yes
+  tasks:
+    ## update & upgrade system
+    - name: Update & upgrade system
+      apt:
+        upgrade: yes
+        update_cache: yes
+
+    ## stop woopchain service
+    - name: Stop woop chain service
+      systemd:
+        state: stopped
+        name: woopchain
+
+    ## get the latest release
+    - name: Get latest release link
+      uri:
+        url: https://api.github.com/repos/Woop-Chain/woopchain/releases/latest
+        return_content: true
+      register: edge_release
+
+    ## download the latest release
+    - name: Download latest Woop Chain release
+      get_url:
+        url: "{{ edge_release.json.assets[3].browser_download_url }}"
+        dest: /tmp/woopchain.tar.gz
+        force: yes
+
+    ## create temp dir for release
+    - name: Create temp dir for Woop Chain release
+      file:
+        path: /tmp/woopchain
+        state: directory
+
+    ## unpack release tar
+    - name: Unpack Woop Chain release
+      unarchive:
+        remote_src: yes
+        src: /tmp/woopchain.tar.gz
+        dest: /tmp/woopchain
+
+    ## set woopchain to PATH
+    - name: Place Woop Chain binary to PATH
+      copy:
+        remote_src: yes
+        src: /tmp/woopchain/woopchain
+        dest: /usr/local/bin/
+        mode: a+x
+        force: yes
+
+    ## remove release temp dir
+    - name: Remove temp Woop Chain release dir
+      file:
+        state: absent
+        path: /tmp/woopchain
+
+    ## start woop chain service
+    - name: Start woopchain service
+      systemd:
+        state: restarted
+        name: woopchain
+        daemon_reload: yes
+        enabled: yes

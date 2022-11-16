@@ -1,0 +1,32 @@
+---
+name: Build
+on:  # yamllint disable-line rule:truthy
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  go_build:
+    name: Woop Chain
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Setup Go environment
+        uses: actions/setup-go@v3.3.0
+        with:
+          go-version: 1.18.x
+
+      - name: Build Woop Chain
+        run: go build -tags netgo -ldflags="-s -w -linkmode external -extldflags "-static" -X \"github.com/Woop-Chain/woopchain/versioning.Version=${GITHUB_REF_NAME}\" -X \"github.com/Woop-Chain/woopchain/versioning.Commit=${GITHUB_SHA}\"" && tar -czvf woopchain.tar.gz woopchain
+        env:
+          CC: gcc
+          CXX: g++
+          GOARC: amd64
+          GOOS: linux
+
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v3
+        with:
+          name: woopchain
+          path: woopchain.tar.gz
+          retention-days: 3
