@@ -1,30 +1,33 @@
-# [ Subject of the issue ]
-## Description
-Describe your issue in as much detail as possible here.
+## [Subject of the issue]
 
-## Your environment
-- OS and version.
-- The version of the Woop Chain.    
-  (*Confirm the version of your Woop Chain client by running the following command: `woopchain version --grpc-address GRPC_ADDRESS`*)
-- The branch that causes this issue.
-- Locally or Cloud hosted (which provider).
-- Please confirm if the validators are running under containerized environment (K8s, Docker, etc.).
+### Description
 
-## Steps to reproduce
-- Tell us how to reproduce this issue.
-- Where the issue is, if you know.
-- Which commands triggered the issue, if any.
-- Provide us with the content of your genesis file.
-- Provide us with commands that you used to start your validators.
-- Provide us with the peer list of each of your validators by running the following command: `woopchain peers list --grpc-address GRPC_ADDRESS`.
-- Is the chain producing blocks and serving customers atm?
+Describe your issue in as much detail as possible here
 
-## Expected behavior
-- Tell us what should happen.
-- Tell us what happened instead.
+### Your environment
 
-## Logs
-Provide us with debug logs from all of your validators by setting logging to `debug` output with: `server --log-level debug`
+* OS and version
+* version of the Woop Chain
+* branch that causes this issue
 
-## Proposed solution
-If you have an idea on how to fix this issue, please write it down here, so we can begin discussing it
+### Steps to reproduce
+
+* Tell us how to reproduce this issue <br />
+* Where the issue is, if you know <br />
+* Which commands triggered the issue, if any
+
+### Expected behaviour
+
+Tell us what should happen
+
+### Actual behaviour
+
+Tell us what happens instead
+
+### Logs
+
+Please paste any logs here that demonstrate the issue, if they exist
+
+### Proposed solution
+
+If you have an idea of how to fix this issue, please write it down here, so we can begin discussing it

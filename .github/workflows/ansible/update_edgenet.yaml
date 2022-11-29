@@ -12,7 +12,7 @@
         update_cache: yes
 
     ## stop woopchain service
-    - name: Stop woop chain service
+    - name: Stop Woop Chain service
       systemd:
         state: stopped
         name: woopchain
@@ -59,7 +59,7 @@
         state: absent
         path: /tmp/woopchain
 
-    ## start woop chain service
+    ## start Woop Chain service
     - name: Start woopchain service
       systemd:
         state: restarted

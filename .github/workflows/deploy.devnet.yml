@@ -15,18 +15,18 @@ permissions:
 jobs:
   snyk:
     name: Snyk and Publish
-    uses: ./.github/workflows/security.yml
+    uses: Woop-Chain/woopchain/.github/workflows/security.yml@develop
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
       SNYK_ORG: ${{ secrets.SNYK_ORG }}
 
   build:
     name: Build
-    uses: ./.github/workflows/build.yml
+    uses: Woop-Chain/woopchain/.github/workflows/build.yml@develop
 
   test:
     name: Test
-    uses: ./.github/workflows/test.yml
+    uses: Woop-Chain/woopchain/.github/workflows/test.yml@develop
     needs: build
 
   deploy_devnet:

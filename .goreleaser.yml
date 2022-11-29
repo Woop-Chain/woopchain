@@ -73,8 +73,8 @@ archives:
 #nfpms:
 #  - vendor: Woop-Chain
 #    homepage: https://wikiwoop.com
-#    maintainer: Woop Chain Team <info@wikiwoop.com>
-#    description:  An Ethereum-compatible Blockchain Network
+#    maintainer: Woop Chain Team <edge@wikiwoop.com>
+#    description:  A Framework for Building Ethereum-compatible Blockchain Networks
 #    license: GPLv3 LGPLv3
 #
 #    formats:

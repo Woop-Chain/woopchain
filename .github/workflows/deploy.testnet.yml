@@ -14,17 +14,17 @@ permissions:
 jobs:
   snyk:
     name: Snyk and Publish
-    uses: ./.github/workflows/security.yml
+    uses: Woop-Chain/woopchain/.github/workflows/security.yml@develop
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
       SNYK_ORG: ${{ secrets.SNYK_ORG }}
 
   build:
-    uses: ./.github/workflows/build.yml
+    uses: Woop-Chain/woopchain/.github/workflows/build.yml@develop
     name: Build
 
   test:
-    uses: ./.github/workflows/test.yml
+    uses: Woop-Chain/woopchain/.github/workflows/test.yml@develop
     name: Test
     needs: build
 
@@ -157,7 +157,7 @@ jobs:
             }
 
   pandoras_box:
-    uses: ./.github/workflows/pandoras_box.yml
+    uses: Woop-Chain/woopchain/.github/workflows/pandoras_box.yml@develop
     name: Pandora's Box
     needs: deploy_testnet
     secrets:
@@ -171,7 +171,7 @@ jobs:
       transaction_count: '10000'
 
   loadbot:
-    uses: ./.github/workflows/loadbot.yml
+    uses: Woop-Chain/woopchain/.github/workflows/loadbot.yml@develop
     name: Loadbot
     needs: deploy_testnet
     secrets:
