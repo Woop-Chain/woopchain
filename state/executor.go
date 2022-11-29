@@ -6,13 +6,13 @@ import (
 	"math"
 	"math/big"
 
+	"github.com/Woop-Chain/woopchain/state/runtime/evm"
+
 	"github.com/hashicorp/go-hclog"
 
 	"github.com/Woop-Chain/woopchain/chain"
 	"github.com/Woop-Chain/woopchain/crypto"
 	"github.com/Woop-Chain/woopchain/state/runtime"
-	"github.com/Woop-Chain/woopchain/state/runtime/evm"
-	"github.com/Woop-Chain/woopchain/state/runtime/precompiled"
 	"github.com/Woop-Chain/woopchain/types"
 )
 
@@ -32,10 +32,11 @@ type GetHashByNumberHelper = func(*types.Header) GetHashByNumber
 
 // Executor is the main entity
 type Executor struct {
-	logger  hclog.Logger
-	config  *chain.Params
-	state   State
-	GetHash GetHashByNumberHelper
+	logger   hclog.Logger
+	config   *chain.Params
+	runtimes []runtime.Runtime
+	state    State
+	GetHash  GetHashByNumberHelper
 
 	PostHook func(txn *Transition)
 }
@@ -43,15 +44,16 @@ type Executor struct {
 // NewExecutor creates a new executor
 func NewExecutor(config *chain.Params, s State, logger hclog.Logger) *Executor {
 	return &Executor{
-		logger: logger,
-		config: config,
-		state:  s,
+		logger:   logger,
+		config:   config,
+		runtimes: []runtime.Runtime{},
+		state:    s,
 	}
 }
 
 func (e *Executor) WriteGenesis(alloc map[types.Address]*chain.GenesisAccount) types.Hash {
 	snap := e.state.NewSnapshot()
-	txn := NewTxn(snap)
+	txn := NewTxn(e.state, snap)
 
 	for addr, account := range alloc {
 		if account.Balance != nil {
@@ -77,6 +79,11 @@ func (e *Executor) WriteGenesis(alloc map[types.Address]*chain.GenesisAccount) t
 	return types.BytesToHash(root)
 }
 
+// SetRuntime adds a runtime to the runtime set
+func (e *Executor) SetRuntime(r runtime.Runtime) {
+	e.runtimes = append(e.runtimes, r)
+}
+
 type BlockResult struct {
 	Root     types.Hash
 	Receipts []*types.Receipt
@@ -93,6 +100,8 @@ func (e *Executor) ProcessBlock(
 	if err != nil {
 		return nil, err
 	}
+
+	txn.block = block
 
 	for _, t := range block.Transactions {
 		if t.ExceedsBlockGasLimit(block.Header.GasLimit) {
@@ -138,7 +147,7 @@ func (e *Executor) BeginTxn(
 		return nil, err
 	}
 
-	newTxn := NewTxn(auxSnap2)
+	newTxn := NewTxn(e.state, auxSnap2)
 
 	env2 := runtime.TxContext{
 		Coinbase:   coinbaseReceiver,
@@ -151,9 +160,9 @@ func (e *Executor) BeginTxn(
 
 	txn := &Transition{
 		logger:   e.logger,
+		r:        e,
 		ctx:      env2,
 		state:    newTxn,
-		snap:     auxSnap2,
 		getHash:  e.GetHash(header),
 		auxState: e.state,
 		config:   config,
@@ -161,10 +170,6 @@ func (e *Executor) BeginTxn(
 
 		receipts: []*types.Receipt{},
 		totalGas: 0,
-
-		evm:         evm.NewEVM(),
-		precompiles: precompiled.NewPrecompiled(),
-		PostHook:    e.PostHook,
 	}
 
 	return txn, nil
@@ -175,8 +180,11 @@ type Transition struct {
 
 	// dummy
 	auxState State
-	snap     Snapshot
 
+	// the current block being processed
+	block *types.Block
+
+	r       *Executor
 	config  chain.ForksInTime
 	state   *Txn
 	getHash GetHashByNumber
@@ -186,21 +194,17 @@ type Transition struct {
 	// result
 	receipts []*types.Receipt
 	totalGas uint64
-
-	PostHook func(t *Transition)
-
-	// runtimes
-	evm         *evm.EVM
-	precompiles *precompiled.Precompiled
 }
 
-func NewTransition(config chain.ForksInTime, snap Snapshot, radix *Txn) *Transition {
+func NewTransition(config chain.ForksInTime, radix *Txn) *Transition {
 	return &Transition{
-		config:      config,
-		state:       radix,
-		snap:        snap,
-		evm:         evm.NewEVM(),
-		precompiles: precompiled.NewPrecompiled(),
+		config: config,
+		state:  radix,
+		r: &Executor{
+			runtimes: []runtime.Runtime{
+				evm.NewEVM(),
+			},
+		},
 	}
 }
 
@@ -215,7 +219,7 @@ func (t *Transition) Receipts() []*types.Receipt {
 var emptyFrom = types.Address{}
 
 func (t *Transition) WriteFailedReceipt(txn *types.Transaction) error {
-	signer := crypto.NewSigner(t.config, uint64(t.ctx.ChainID))
+	signer := crypto.NewSigner(t.config, uint64(t.r.config.ChainID))
 
 	if txn.From == emptyFrom {
 		// Decrypt the from address
@@ -246,7 +250,7 @@ func (t *Transition) WriteFailedReceipt(txn *types.Transaction) error {
 
 // Write writes another transaction to the executor
 func (t *Transition) Write(txn *types.Transaction) error {
-	signer := crypto.NewSigner(t.config, uint64(t.ctx.ChainID))
+	signer := crypto.NewSigner(t.config, uint64(t.r.config.ChainID))
 
 	var err error
 	if txn.From == emptyFrom {
@@ -271,19 +275,29 @@ func (t *Transition) Write(txn *types.Transaction) error {
 
 	logs := t.state.Logs()
 
+	var root []byte
+
 	receipt := &types.Receipt{
 		CumulativeGasUsed: t.totalGas,
 		TxHash:            txn.Hash,
 		GasUsed:           result.GasUsed,
 	}
 
-	// The suicided accounts are set as deleted for the next iteration
-	t.state.CleanDeleteObjects(true)
+	if t.config.Byzantium {
+		// The suicided accounts are set as deleted for the next iteration
+		t.state.CleanDeleteObjects(true)
 
-	if result.Failed() {
-		receipt.SetStatus(types.ReceiptFailed)
+		if result.Failed() {
+			receipt.SetStatus(types.ReceiptFailed)
+		} else {
+			receipt.SetStatus(types.ReceiptSuccess)
+		}
 	} else {
-		receipt.SetStatus(types.ReceiptSuccess)
+		objs := t.state.Commit(t.config.EIP155)
+		ss, aux := t.state.snapshot.Commit(objs)
+		t.state = NewTxn(t.auxState, ss)
+		root = aux
+		receipt.Root = types.BytesToHash(root)
 	}
 
 	// if the transaction created a contract, store the creation address in the receipt.
@@ -302,7 +316,7 @@ func (t *Transition) Write(txn *types.Transaction) error {
 // Commit commits the final result
 func (t *Transition) Commit() (Snapshot, types.Hash) {
 	objs := t.state.Commit(t.config.EIP155)
-	s2, root := t.snap.Commit(objs)
+	s2, root := t.state.snapshot.Commit(objs)
 
 	return s2, types.BytesToHash(root)
 }
@@ -321,8 +335,16 @@ func (t *Transition) addGasPool(amount uint64) {
 	t.gasPool += amount
 }
 
+func (t *Transition) SetTxn(txn *Txn) {
+	t.state = txn
+}
+
 func (t *Transition) Txn() *Txn {
 	return t.state
+}
+
+func (t *Transition) GetTxnHash() types.Hash {
+	return t.block.Hash()
 }
 
 // Apply applies a new transaction
@@ -334,8 +356,8 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 		t.state.RevertToSnapshot(s)
 	}
 
-	if t.PostHook != nil {
-		t.PostHook(t)
+	if t.r.PostHook != nil {
+		t.r.PostHook(t)
 	}
 
 	return result, err
@@ -513,17 +535,14 @@ func (t *Transition) Call2(
 }
 
 func (t *Transition) run(contract *runtime.Contract, host runtime.Host) *runtime.ExecutionResult {
-	// check the precompiles
-	if t.precompiles.CanRun(contract, host, &t.config) {
-		return t.precompiles.Run(contract, host, &t.config)
-	}
-	// check the evm
-	if t.evm.CanRun(contract, host, &t.config) {
-		return t.evm.Run(contract, host, &t.config)
+	for _, r := range t.r.runtimes {
+		if r.CanRun(contract, host, &t.config) {
+			return r.Run(contract, host, &t.config)
+		}
 	}
 
 	return &runtime.ExecutionResult{
-		Err: fmt.Errorf("runtime not found"),
+		Err: fmt.Errorf("not found"),
 	}
 }
 

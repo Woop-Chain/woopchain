@@ -220,7 +220,7 @@ func (m *syncPeerClient) startNewBlockProcess() {
 
 // startPeerEventProcess starts subscribing peer connection change events and process them
 func (m *syncPeerClient) startPeerEventProcess() {
-	peerEventCh, err := m.network.SubscribeCh(context.Background())
+	peerEventCh, err := m.network.SubscribeCh()
 	if err != nil {
 		m.logger.Error("failed to subscribe", "err", err)
 

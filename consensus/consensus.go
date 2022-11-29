@@ -68,6 +68,7 @@ type Params struct {
 	Executor       *state.Executor
 	Grpc           *grpc.Server
 	Logger         hclog.Logger
+	Metrics        *Metrics
 	SecretsManager secrets.SecretsManager
 	BlockTime      uint64
 }

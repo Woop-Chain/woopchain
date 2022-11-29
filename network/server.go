@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Woop-Chain/woopchain/network/common"
 	"github.com/Woop-Chain/woopchain/network/dial"
 	"github.com/Woop-Chain/woopchain/network/discovery"
-	"github.com/armon/go-metrics"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	rawGrpc "google.golang.org/grpc"
@@ -66,6 +66,8 @@ type Server struct {
 
 	peers     map[peer.ID]*PeerConnInfo // map of all peer connections
 	peersLock sync.Mutex                // lock for the peer map
+
+	metrics *Metrics // reference for metrics tracking
 
 	dialQueue *dial.DialQueue // queue used to asynchronously connect to peers
 
@@ -137,6 +139,7 @@ func NewServer(logger hclog.Logger, config *Config) (*Server, error) {
 		host:             host,
 		addrs:            host.Addrs(),
 		peers:            make(map[peer.ID]*PeerConnInfo),
+		metrics:          config.Metrics,
 		dialQueue:        dial.NewDialQueue(),
 		closeCh:          make(chan struct{}),
 		emitterPeerEvent: emitter,
@@ -350,29 +353,22 @@ func (s *Server) runDial() {
 	// having events go missing, as they're crucial to the functioning
 	// of the runDial mechanism
 	notifyCh := make(chan struct{}, 1)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// cancel context first
 	defer close(notifyCh)
-	defer cancel()
 
-	if err := s.SubscribeFn(ctx, func(event *peerEvent.PeerEvent) {
+	if err := s.SubscribeFn(func(event *peerEvent.PeerEvent) {
 		// Only concerned about the listed event types
 		switch event.Type {
 		case
 			peerEvent.PeerConnected,
 			peerEvent.PeerFailedToConnect,
 			peerEvent.PeerDisconnected,
-			peerEvent.PeerDialCompleted,
+			peerEvent.PeerDialCompleted, // @Yoshiki, not sure we need to monitor this event type here
 			peerEvent.PeerAddedToDialQueue:
 		default:
 			return
 		}
 
 		select {
-		case <-ctx.Done():
-			return
 		case notifyCh <- struct{}{}:
 		default:
 		}
@@ -514,7 +510,9 @@ func (s *Server) removePeerInfo(peerID peer.ID) *PeerConnInfo {
 		}
 	}
 
-	metrics.SetGauge([]string{"peers"}, float32(len(s.peers)))
+	s.metrics.TotalPeerCount.Set(
+		float64(len(s.peers)),
+	)
 
 	return connectionInfo
 }
@@ -706,25 +704,22 @@ func (s *Server) Subscribe() (*Subscription, error) {
 }
 
 // SubscribeFn is a helper method to run subscription of PeerEvents
-func (s *Server) SubscribeFn(ctx context.Context, handler func(evnt *peerEvent.PeerEvent)) error {
+func (s *Server) SubscribeFn(handler func(evnt *peerEvent.PeerEvent)) error {
 	sub, err := s.Subscribe()
 	if err != nil {
 		return err
 	}
 
 	go func() {
-		defer sub.Close()
-
 		for {
 			select {
-			case <-ctx.Done():
-				return
-
-			case <-s.closeCh:
-				return
-
 			case evnt := <-sub.GetCh():
 				handler(evnt)
+
+			case <-s.closeCh:
+				sub.Close()
+
+				return
 			}
 		}
 	}()
@@ -733,33 +728,27 @@ func (s *Server) SubscribeFn(ctx context.Context, handler func(evnt *peerEvent.P
 }
 
 // SubscribeCh returns an event of of subscription events
-func (s *Server) SubscribeCh(ctx context.Context) (<-chan *peerEvent.PeerEvent, error) {
+func (s *Server) SubscribeCh() (<-chan *peerEvent.PeerEvent, error) {
 	ch := make(chan *peerEvent.PeerEvent)
-	ctx, cancel := context.WithCancel(ctx)
 
-	err := s.SubscribeFn(ctx, func(evnt *peerEvent.PeerEvent) {
-		select {
-		case <-ctx.Done():
-			return
-		case ch <- evnt:
+	var isClosed int32 = 0
+
+	err := s.SubscribeFn(func(evnt *peerEvent.PeerEvent) {
+		if atomic.LoadInt32(&isClosed) == 0 {
+			ch <- evnt
 		}
 	})
-
-	cleanup := func() {
-		cancel()
-		close(ch)
-	}
-
 	if err != nil {
-		cleanup()
+		atomic.StoreInt32(&isClosed, 1)
+		close(ch)
 
 		return nil, err
 	}
 
 	go func() {
 		<-s.closeCh
-
-		cleanup()
+		atomic.StoreInt32(&isClosed, 1)
+		close(ch)
 	}()
 
 	return ch, nil
@@ -769,10 +758,13 @@ func (s *Server) SubscribeCh(ctx context.Context) (<-chan *peerEvent.PeerEvent, 
 func (s *Server) updateConnCountMetrics(direction network.Direction) {
 	switch direction {
 	case network.DirInbound:
-		metrics.SetGauge([]string{"inbound_connections_count"}, float32(s.connectionCounts.GetInboundConnCount()))
-
+		s.metrics.InboundConnectionsCount.Set(
+			float64(s.connectionCounts.GetInboundConnCount()),
+		)
 	case network.DirOutbound:
-		metrics.SetGauge([]string{"outbound_connections_count"}, float32(s.connectionCounts.GetOutboundConnCount()))
+		s.metrics.OutboundConnectionsCount.Set(
+			float64(s.connectionCounts.GetOutboundConnCount()),
+		)
 	}
 }
 
@@ -780,11 +772,12 @@ func (s *Server) updateConnCountMetrics(direction network.Direction) {
 func (s *Server) updatePendingConnCountMetrics(direction network.Direction) {
 	switch direction {
 	case network.DirInbound:
-		metrics.SetGauge([]string{"pending_inbound_connections_count"},
-			float32(s.connectionCounts.GetPendingInboundConnCount()))
-
+		s.metrics.PendingInboundConnectionsCount.Set(
+			float64(s.connectionCounts.GetPendingInboundConnCount()),
+		)
 	case network.DirOutbound:
-		metrics.SetGauge([]string{"pending_outbound_connections_count"},
-			float32(s.connectionCounts.GetPendingOutboundConnCount()))
+		s.metrics.PendingOutboundConnectionsCount.Set(
+			float64(s.connectionCounts.GetPendingOutboundConnCount()),
+		)
 	}
 }

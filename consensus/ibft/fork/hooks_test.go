@@ -12,6 +12,7 @@ import (
 	stakingHelper "github.com/Woop-Chain/woopchain/helper/staking"
 	"github.com/Woop-Chain/woopchain/state"
 	itrie "github.com/Woop-Chain/woopchain/state/immutable-trie"
+	"github.com/Woop-Chain/woopchain/state/runtime/evm"
 	"github.com/Woop-Chain/woopchain/types"
 	"github.com/Woop-Chain/woopchain/validators"
 	"github.com/Woop-Chain/woopchain/validators/store"
@@ -282,6 +283,8 @@ func newTestTransition(
 	}, st, hclog.NewNullLogger())
 
 	rootHash := ex.WriteGenesis(nil)
+
+	ex.SetRuntime(evm.NewEVM())
 	ex.GetHash = func(h *types.Header) state.GetHashByNumber {
 		return func(i uint64) types.Hash {
 			return rootHash

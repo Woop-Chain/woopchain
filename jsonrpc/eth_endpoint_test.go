@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/Woop-Chain/woopchain/state"
 	"github.com/Woop-Chain/woopchain/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +16,7 @@ func TestEth_DecodeTxn(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		accounts map[types.Address]*Account
+		accounts map[types.Address]*state.Account
 		arg      *txnArgs
 		res      *types.Transaction
 		err      error
@@ -76,7 +77,7 @@ func TestEth_DecodeTxn(t *testing.T) {
 		},
 		{
 			name: "should set latest nonce as default",
-			accounts: map[types.Address]*Account{
+			accounts: map[types.Address]*state.Account{
 				addr1: {
 					Nonce: 10,
 				},
@@ -170,11 +171,11 @@ func TestEth_GetNextNonce(t *testing.T) {
 	// Set up the mock accounts
 	accounts := []struct {
 		address types.Address
-		account *Account
+		account *state.Account
 	}{
 		{
 			types.StringToAddress("123"),
-			&Account{
+			&state.Account{
 				Nonce: 5,
 			},
 		},
@@ -237,63 +238,4 @@ func newTestEthEndpoint(store ethStore) *Eth {
 
 func newTestEthEndpointWithPriceLimit(store ethStore, priceLimit uint64) *Eth {
 	return &Eth{hclog.NewNullLogger(), store, 100, nil, priceLimit}
-}
-
-func TestEth_HeaderResolveBlock(t *testing.T) {
-	// Set up the mock store
-	store := newMockStore()
-	store.header.Number = 10
-
-	eth := newTestEthEndpoint(store)
-
-	latest := LatestBlockNumber
-	blockNum5 := BlockNumber(5)
-	blockNum10 := BlockNumber(10)
-	hash := types.Hash{0x1}
-
-	cases := []struct {
-		filter BlockNumberOrHash
-		err    bool
-	}{
-		{
-			// both fields are empty
-			BlockNumberOrHash{},
-			false,
-		},
-		{
-			// return the latest block number
-			BlockNumberOrHash{BlockNumber: &latest},
-			false,
-		},
-		{
-			// specific real block number
-			BlockNumberOrHash{BlockNumber: &blockNum10},
-			false,
-		},
-		{
-			// specific block number (not found)
-			BlockNumberOrHash{BlockNumber: &blockNum5},
-			true,
-		},
-		{
-			// specific block by hash (found). By default all blocks in the mock have hash zero
-			BlockNumberOrHash{BlockHash: &types.ZeroHash},
-			false,
-		},
-		{
-			// specific block by hash (not found)
-			BlockNumberOrHash{BlockHash: &hash},
-			true,
-		},
-	}
-
-	for _, c := range cases {
-		header, err := eth.getHeaderFromBlockNumberOrHash(c.filter)
-		if c.err {
-			assert.Error(t, err)
-		} else {
-			assert.NoError(t, err)
-			assert.Equal(t, header.Number, uint64(10))
-		}
-	}
 }

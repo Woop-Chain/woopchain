@@ -1,7 +1,9 @@
 package jsonrpc
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -24,7 +26,7 @@ func TestEth_State_GetBalance(t *testing.T) {
 	store := &mockSpecialStore{
 		account: &mockAccount{
 			address: addr0,
-			account: &Account{
+			account: &state.Account{
 				Balance: big.NewInt(100),
 			},
 			storage: make(map[types.Hash][]byte),
@@ -156,7 +158,7 @@ func TestEth_State_GetTransactionCount(t *testing.T) {
 	store := &mockSpecialStore{
 		account: &mockAccount{
 			address: addr0,
-			account: &Account{
+			account: &state.Account{
 				Balance: big.NewInt(100),
 				Nonce:   100,
 			},
@@ -274,9 +276,10 @@ func TestEth_State_GetCode(t *testing.T) {
 	store := &mockSpecialStore{
 		account: &mockAccount{
 			address: addr0,
-			account: &Account{
-				Balance: big.NewInt(100),
-				Nonce:   100,
+			account: &state.Account{
+				Balance:  big.NewInt(100),
+				Nonce:    100,
+				CodeHash: types.BytesToHash(addr0.Bytes()).Bytes(),
 			},
 			code: code0,
 		},
@@ -398,7 +401,7 @@ func TestEth_State_GetStorageAt(t *testing.T) {
 	store := &mockSpecialStore{
 		account: &mockAccount{
 			address: addr0,
-			account: &Account{
+			account: &state.Account{
 				Balance: big.NewInt(100),
 				Nonce:   100,
 			},
@@ -547,7 +550,7 @@ func TestEth_State_GetStorageAt(t *testing.T) {
 			for addr, storage := range tt.initialStorage {
 				store.account = &mockAccount{
 					address: addr,
-					account: &Account{
+					account: &state.Account{
 						Balance: big.NewInt(100),
 						Nonce:   100,
 					},
@@ -595,7 +598,7 @@ func getExampleStore() *mockSpecialStore {
 	return &mockSpecialStore{
 		account: &mockAccount{
 			address: addr0,
-			account: &Account{
+			account: &state.Account{
 				Balance: big.NewInt(100),
 				Nonce:   0,
 			},
@@ -697,7 +700,7 @@ func TestEth_EstimateGas_GasLimit(t *testing.T) {
 				assert.NoError(t, estimateErr)
 
 				// Make sure the estimate is correct
-				assert.Equal(t, argUint64(testCase.intrinsicGasCost), estimate)
+				assert.Equal(t, fmt.Sprintf("0x%x", testCase.intrinsicGasCost), estimate)
 			}
 		})
 	}
@@ -774,27 +777,27 @@ type mockSpecialStore struct {
 }
 
 func (m *mockSpecialStore) GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool) {
-	if m.block.Header.Hash != hash {
+	if m.block.Header.Hash.String() != hash.String() {
 		return nil, false
 	}
 
 	return m.block, true
 }
 
-func (m *mockSpecialStore) GetAccount(root types.Hash, addr types.Address) (*Account, error) {
-	if m.account.address != addr {
+func (m *mockSpecialStore) GetAccount(root types.Hash, addr types.Address) (*state.Account, error) {
+	if m.account.address.String() != addr.String() {
 		return nil, ErrStateNotFound
 	}
 
 	return m.account.account, nil
 }
 
-func (m *mockSpecialStore) GetBlockByNumber(blockNumber uint64, full bool) (*types.Block, bool) {
+func (m *mockSpecialStore) GetHeaderByNumber(blockNumber uint64) (*types.Header, bool) {
 	if m.block.Number() != blockNumber {
 		return nil, false
 	}
 
-	return m.block, true
+	return m.block.Header, true
 }
 
 func (m *mockSpecialStore) Header() *types.Header {
@@ -806,7 +809,7 @@ func (m *mockSpecialStore) GetNonce(addr types.Address) uint64 {
 }
 
 func (m *mockSpecialStore) GetStorage(root types.Hash, addr types.Address, slot types.Hash) ([]byte, error) {
-	if m.account.address != addr {
+	if m.account.address.String() != addr.String() {
 		return nil, ErrStateNotFound
 	}
 
@@ -820,12 +823,12 @@ func (m *mockSpecialStore) GetStorage(root types.Hash, addr types.Address, slot 
 	return val, nil
 }
 
-func (m *mockSpecialStore) GetCode(root types.Hash, addr types.Address) ([]byte, error) {
-	if m.account.address != addr {
-		return nil, ErrStateNotFound
+func (m *mockSpecialStore) GetCode(hash types.Hash) ([]byte, error) {
+	if bytes.Equal(m.account.account.CodeHash, hash.Bytes()) {
+		return m.account.code, nil
 	}
 
-	return m.account.code, nil
+	return nil, fmt.Errorf("code not found")
 }
 
 func (m *mockSpecialStore) GetForksInTime(blockNumber uint64) chain.ForksInTime {

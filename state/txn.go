@@ -8,17 +8,12 @@ import (
 
 	"github.com/Woop-Chain/woopchain/chain"
 	"github.com/Woop-Chain/woopchain/crypto"
+	"github.com/Woop-Chain/woopchain/helper/keccak"
 	"github.com/Woop-Chain/woopchain/state/runtime"
 	"github.com/Woop-Chain/woopchain/types"
 )
 
 var emptyStateHash = types.StringToHash("0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
-
-type readSnapshot interface {
-	GetStorage(addr types.Address, root types.Hash, key types.Hash) types.Hash
-	GetAccount(addr types.Address) (*Account, error)
-	GetCode(hash types.Hash) ([]byte, bool)
-}
 
 var (
 	// logIndex is the index of the logs in the trie
@@ -30,31 +25,43 @@ var (
 
 // Txn is a reference of the state
 type Txn struct {
-	snapshot  readSnapshot
+	snapshot  Snapshot
+	state     State
 	snapshots []*iradix.Tree
 	txn       *iradix.Txn
 	codeCache *lru.Cache
+	hash      *keccak.Keccak
 }
 
-func NewTxn(snapshot Snapshot) *Txn {
-	return newTxn(snapshot)
+func NewTxn(state State, snapshot Snapshot) *Txn {
+	return newTxn(state, snapshot)
 }
 
 func (txn *Txn) GetRadix() *iradix.Txn {
 	return txn.txn
 }
 
-func newTxn(snapshot readSnapshot) *Txn {
+func newTxn(state State, snapshot Snapshot) *Txn {
 	i := iradix.New()
 
 	codeCache, _ := lru.New(20)
 
 	return &Txn{
 		snapshot:  snapshot,
+		state:     state,
 		snapshots: []*iradix.Tree{},
 		txn:       i.Txn(),
 		codeCache: codeCache,
+		hash:      keccak.NewKeccak256(),
 	}
+}
+
+func (txn *Txn) hashit(src []byte) []byte {
+	txn.hash.Reset()
+	txn.hash.Write(src)
+	// hashit is used to make queries so we do not need to
+	// make copies of the result
+	return txn.hash.Read()
 }
 
 // Snapshot takes a snapshot at this point in time
@@ -99,13 +106,26 @@ func (txn *Txn) getStateObject(addr types.Address) (*StateObject, bool) {
 		return obj.Copy(), true
 	}
 
-	account, err := txn.snapshot.GetAccount(addr)
-	if err != nil {
+	data, ok := txn.snapshot.Get(txn.hashit(addr.Bytes()))
+	if !ok {
 		return nil, false
 	}
 
-	if account == nil {
+	var err error
+
+	var account Account
+	if err = account.UnmarshalRlp(data); err != nil {
 		return nil, false
+	}
+
+	// Load trie from memory if there is some state
+	if account.Root == emptyStateHash {
+		account.Trie = txn.state.NewSnapshot()
+	} else {
+		account.Trie, err = txn.state.NewSnapshotAt(account.Root)
+		if err != nil {
+			return nil, false
+		}
 	}
 
 	obj := &StateObject{
@@ -121,6 +141,7 @@ func (txn *Txn) upsertAccount(addr types.Address, create bool, f func(object *St
 		object = &StateObject{
 			Account: &Account{
 				Balance:  big.NewInt(0),
+				Trie:     txn.state.NewSnapshot(),
 				CodeHash: emptyCodeHash,
 				Root:     emptyStateHash,
 			},
@@ -339,7 +360,10 @@ func (txn *Txn) GetState(addr types.Address, key types.Hash) types.Hash {
 		}
 	}
 
-	return txn.snapshot.GetStorage(addr, object.Account.Root, key)
+	// If the object was not found in the radix trie due to no state update, we fetch it from the trie tre
+	k := txn.hashit(key.Bytes())
+
+	return object.GetCommitedState(types.BytesToHash(k))
 }
 
 // Nonce
@@ -396,7 +420,7 @@ func (txn *Txn) GetCode(addr types.Address) []byte {
 		return v.([]byte)
 	}
 
-	code, _ := txn.snapshot.GetCode(types.BytesToHash(object.Account.CodeHash))
+	code, _ := txn.state.GetCode(types.BytesToHash(object.Account.CodeHash))
 	txn.codeCache.Add(addr, code)
 
 	return code
@@ -480,7 +504,7 @@ func (txn *Txn) GetCommittedState(addr types.Address, key types.Hash) types.Hash
 		return types.Hash{}
 	}
 
-	return txn.snapshot.GetStorage(addr, obj.Account.Root, key)
+	return obj.GetCommitedState(types.BytesToHash(txn.hashit(key.Bytes())))
 }
 
 func (txn *Txn) TouchAccount(addr types.Address) {
@@ -510,6 +534,7 @@ func newStateObject(txn *Txn) *StateObject {
 	return &StateObject{
 		Account: &Account{
 			Balance:  big.NewInt(0),
+			Trie:     txn.state.NewSnapshot(),
 			CodeHash: emptyCodeHash,
 			Root:     emptyStateHash,
 		},
@@ -520,6 +545,7 @@ func (txn *Txn) CreateAccount(addr types.Address) {
 	obj := &StateObject{
 		Account: &Account{
 			Balance:  big.NewInt(0),
+			Trie:     txn.state.NewSnapshot(),
 			CodeHash: emptyCodeHash,
 			Root:     emptyStateHash,
 		},

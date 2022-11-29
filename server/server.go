@@ -18,6 +18,7 @@ import (
 	"github.com/Woop-Chain/woopchain/crypto"
 	"github.com/Woop-Chain/woopchain/helper/common"
 	configHelper "github.com/Woop-Chain/woopchain/helper/config"
+	"github.com/Woop-Chain/woopchain/helper/keccak"
 	"github.com/Woop-Chain/woopchain/helper/progress"
 	"github.com/Woop-Chain/woopchain/jsonrpc"
 	"github.com/Woop-Chain/woopchain/network"
@@ -26,6 +27,8 @@ import (
 	"github.com/Woop-Chain/woopchain/state"
 	itrie "github.com/Woop-Chain/woopchain/state/immutable-trie"
 	"github.com/Woop-Chain/woopchain/state/runtime"
+	"github.com/Woop-Chain/woopchain/state/runtime/evm"
+	"github.com/Woop-Chain/woopchain/state/runtime/precompiled"
 	"github.com/Woop-Chain/woopchain/txpool"
 	"github.com/Woop-Chain/woopchain/types"
 	"github.com/hashicorp/go-hclog"
@@ -62,6 +65,8 @@ type Server struct {
 	// transaction pool
 	txpool *txpool.TxPool
 
+	serverMetrics *serverMetrics
+
 	prometheusServer *http.Server
 
 	// secrets manager
@@ -85,19 +90,17 @@ func newFileLogger(config *Config) (hclog.Logger, error) {
 	}
 
 	return hclog.New(&hclog.LoggerOptions{
-		Name:       "woop",
-		Level:      config.LogLevel,
-		Output:     logFileWriter,
-		JSONFormat: config.JSONLogFormat,
+		Name:   "woopchain",
+		Level:  config.LogLevel,
+		Output: logFileWriter,
 	}), nil
 }
 
 // newCLILogger returns minimal logger instance that sends all logs to standard output
 func newCLILogger(config *Config) hclog.Logger {
 	return hclog.New(&hclog.LoggerOptions{
-		Name:       "woop",
-		Level:      config.LogLevel,
-		JSONFormat: config.JSONLogFormat,
+		Name:  "woopchain",
+		Level: config.LogLevel,
 	})
 }
 
@@ -139,12 +142,11 @@ func NewServer(config *Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to create data directories: %w", err)
 	}
 
-	if err := m.setupTelemetry(); err != nil {
-		return nil, err
-	}
-
 	if config.Telemetry.PrometheusAddr != nil {
+		m.serverMetrics = metricProvider("woopchain", config.Chain.Name, true)
 		m.prometheusServer = m.startPrometheusServer(config.Telemetry.PrometheusAddr)
+	} else {
+		m.serverMetrics = metricProvider("woopchain", config.Chain.Name, false)
 	}
 
 	// Set up datadog profiler
@@ -163,6 +165,7 @@ func NewServer(config *Config) (*Server, error) {
 		netConfig.Chain = m.config.Chain
 		netConfig.DataDir = filepath.Join(m.config.DataDir, "libp2p")
 		netConfig.SecretsManager = m.secretsManager
+		netConfig.Metrics = m.serverMetrics.network
 
 		network, err := network.NewServer(logger, netConfig)
 		if err != nil {
@@ -183,6 +186,8 @@ func NewServer(config *Config) (*Server, error) {
 	m.state = st
 
 	m.executor = state.NewExecutor(config.Chain.Params, st, logger)
+	m.executor.SetRuntime(precompiled.NewPrecompiled())
+	m.executor.SetRuntime(evm.NewEVM())
 
 	// compute the genesis root state
 	genesisRoot := m.executor.WriteGenesis(config.Chain.Genesis.Alloc)
@@ -217,6 +222,7 @@ func NewServer(config *Config) (*Server, error) {
 			hub,
 			m.grpcServer,
 			m.network,
+			m.serverMetrics.txpool,
 			&txpool.Config{
 				MaxSlots:            m.config.MaxSlots,
 				PriceLimit:          m.config.PriceLimit,
@@ -298,14 +304,19 @@ type txpoolHub struct {
 }
 
 func (t *txpoolHub) GetNonce(root types.Hash, addr types.Address) uint64 {
-	// TODO: Use a function that returns only Account
 	snap, err := t.state.NewSnapshotAt(root)
 	if err != nil {
 		return 0
 	}
 
-	account, err := snap.GetAccount(addr)
-	if err != nil {
+	result, ok := snap.Get(keccak.Keccak256(nil, addr.Bytes()))
+	if !ok {
+		return 0
+	}
+
+	var account state.Account
+
+	if err := account.UnmarshalRlp(result); err != nil {
 		return 0
 	}
 
@@ -318,9 +329,14 @@ func (t *txpoolHub) GetBalance(root types.Hash, addr types.Address) (*big.Int, e
 		return nil, fmt.Errorf("unable to get snapshot for root, %w", err)
 	}
 
-	account, err := snap.GetAccount(addr)
-	if err != nil {
-		return big.NewInt(0), err
+	result, ok := snap.Get(keccak.Keccak256(nil, addr.Bytes()))
+	if !ok {
+		return big.NewInt(0), nil
+	}
+
+	var account state.Account
+	if err = account.UnmarshalRlp(result); err != nil {
+		return nil, fmt.Errorf("unable to unmarshal account from snapshot, %w", err)
 	}
 
 	return account.Balance, nil
@@ -400,6 +416,7 @@ func (s *Server) setupConsensus() error {
 			Executor:       s.executor,
 			Grpc:           s.grpcServer,
 			Logger:         s.logger,
+			Metrics:        s.serverMetrics.consensus,
 			SecretsManager: s.secretsManager,
 			BlockTime:      s.config.BlockTime,
 		},
@@ -431,36 +448,36 @@ func (j *jsonRPCHub) GetPeers() int {
 	return len(j.Server.Peers())
 }
 
-func (j *jsonRPCHub) getAccountImpl(root types.Hash, addr types.Address) (*state.Account, error) {
+func (j *jsonRPCHub) getState(root types.Hash, slot []byte) ([]byte, error) {
+	// the values in the trie are the hashed objects of the keys
+	key := keccak.Keccak256(nil, slot)
+
 	snap, err := j.state.NewSnapshotAt(root)
 	if err != nil {
 		return nil, err
 	}
 
-	account, err := snap.GetAccount(addr)
-	if err != nil {
-		return nil, err
-	}
+	result, ok := snap.Get(key)
 
-	if account == nil {
+	if !ok {
 		return nil, jsonrpc.ErrStateNotFound
 	}
 
-	return account, nil
+	return result, nil
 }
 
-func (j *jsonRPCHub) GetAccount(root types.Hash, addr types.Address) (*jsonrpc.Account, error) {
-	acct, err := j.getAccountImpl(root, addr)
+func (j *jsonRPCHub) GetAccount(root types.Hash, addr types.Address) (*state.Account, error) {
+	obj, err := j.getState(root, addr.Bytes())
 	if err != nil {
 		return nil, err
 	}
 
-	account := &jsonrpc.Account{
-		Nonce:   acct.Nonce,
-		Balance: new(big.Int).Set(acct.Balance),
+	var account state.Account
+	if err := account.UnmarshalRlp(obj); err != nil {
+		return nil, err
 	}
 
-	return account, nil
+	return &account, nil
 }
 
 // GetForksInTime returns the active forks at the given block height
@@ -468,34 +485,30 @@ func (j *jsonRPCHub) GetForksInTime(blockNumber uint64) chain.ForksInTime {
 	return j.Executor.GetForksInTime(blockNumber)
 }
 
-func (j *jsonRPCHub) GetStorage(stateRoot types.Hash, addr types.Address, slot types.Hash) ([]byte, error) {
-	account, err := j.getAccountImpl(stateRoot, addr)
+func (j *jsonRPCHub) GetStorage(root types.Hash, addr types.Address, slot types.Hash) ([]byte, error) {
+	account, err := j.GetAccount(root, addr)
+
 	if err != nil {
 		return nil, err
 	}
 
-	snap, err := j.state.NewSnapshotAt(stateRoot)
+	obj, err := j.getState(account.Root, slot.Bytes())
+
 	if err != nil {
 		return nil, err
 	}
 
-	res := snap.GetStorage(addr, account.Root, slot)
-
-	return res.Bytes(), nil
+	return obj, nil
 }
 
-func (j *jsonRPCHub) GetCode(root types.Hash, addr types.Address) ([]byte, error) {
-	account, err := j.getAccountImpl(root, addr)
-	if err != nil {
-		return nil, err
-	}
+func (j *jsonRPCHub) GetCode(hash types.Hash) ([]byte, error) {
+	res, ok := j.state.GetCode(hash)
 
-	code, ok := j.state.GetCode(account.Root)
 	if !ok {
 		return nil, fmt.Errorf("unable to fetch code")
 	}
 
-	return code, nil
+	return res, nil
 }
 
 func (j *jsonRPCHub) ApplyTxn(

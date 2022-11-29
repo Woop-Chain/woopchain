@@ -11,6 +11,8 @@ import (
 	"github.com/Woop-Chain/woopchain/chain"
 	"github.com/Woop-Chain/woopchain/helper/hex"
 	"github.com/Woop-Chain/woopchain/state"
+	"github.com/Woop-Chain/woopchain/state/runtime/evm"
+	"github.com/Woop-Chain/woopchain/state/runtime/precompiled"
 	"github.com/Woop-Chain/woopchain/types"
 	"github.com/hashicorp/go-hclog"
 )
@@ -49,6 +51,8 @@ func RunSpecificTest(t *testing.T, file string, c stateCase, name, fork string, 
 	forks := config.At(uint64(env.Number))
 
 	xxx := state.NewExecutor(&chain.Params{Forks: config, ChainID: 1}, s, hclog.NewNullLogger())
+	xxx.SetRuntime(precompiled.NewPrecompiled())
+	xxx.SetRuntime(evm.NewEVM())
 
 	xxx.PostHook = func(t *state.Transition) {
 		if name == "failed_tx_xcf416c53" {

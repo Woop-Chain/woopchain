@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/Woop-Chain/woopchain/helper/hex"
+	"github.com/Woop-Chain/woopchain/state"
 	"github.com/Woop-Chain/woopchain/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -19,7 +21,7 @@ func TestEth_TxnPool_SendRawTransaction(t *testing.T) {
 	txn.ComputeHash()
 
 	data := txn.MarshalRLP()
-	_, err := eth.SendRawTransaction(data)
+	_, err := eth.SendRawTransaction(hex.EncodeToHex(data))
 	assert.NoError(t, err)
 	assert.NotEqual(t, store.txn.Hash, types.ZeroHash)
 
@@ -41,7 +43,7 @@ func TestEth_TxnPool_SendTransaction(t *testing.T) {
 		GasPrice: big.NewInt(int64(1)),
 	}
 
-	_, err := eth.SendRawTransaction(txToSend.MarshalRLP())
+	_, err := eth.SendRawTransaction(hex.EncodeToHex(txToSend.MarshalRLP()))
 	assert.NoError(t, err)
 	assert.NotEqual(t, store.txn.Hash, types.ZeroHash)
 }
@@ -68,7 +70,7 @@ func (m *mockStoreTxn) AddAccount(addr types.Address) *mockAccount {
 
 	acct := &mockAccount{
 		address: addr,
-		account: &Account{},
+		account: &state.Account{},
 		storage: make(map[types.Hash][]byte),
 	}
 	m.accounts[addr] = acct
@@ -80,7 +82,7 @@ func (m *mockStoreTxn) Header() *types.Header {
 	return &types.Header{}
 }
 
-func (m *mockStoreTxn) GetAccount(root types.Hash, addr types.Address) (*Account, error) {
+func (m *mockStoreTxn) GetAccount(root types.Hash, addr types.Address) (*state.Account, error) {
 	acct, ok := m.accounts[addr]
 	if !ok {
 		return nil, ErrStateNotFound

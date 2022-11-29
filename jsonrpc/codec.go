@@ -94,12 +94,6 @@ func (e *ObjectError) Error() string {
 }
 
 const (
-	pending  = "pending"
-	latest   = "latest"
-	earliest = "earliest"
-)
-
-const (
 	PendingBlockNumber  = BlockNumber(-3)
 	LatestBlockNumber   = BlockNumber(-2)
 	EarliestBlockNumber = BlockNumber(-1)

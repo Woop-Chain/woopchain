@@ -3,6 +3,7 @@ package jsonrpc
 import (
 	"fmt"
 
+	"github.com/Woop-Chain/woopchain/helper/hex"
 	"github.com/Woop-Chain/woopchain/helper/keccak"
 	"github.com/Woop-Chain/woopchain/versioning"
 )
@@ -26,8 +27,13 @@ func (w *Web3) ClientVersion() (interface{}, error) {
 }
 
 // Sha3 returns Keccak-256 (not the standardized SHA3-256) of the given data
-func (w *Web3) Sha3(v argBytes) (interface{}, error) {
+func (w *Web3) Sha3(val string) (interface{}, error) {
+	v, err := hex.DecodeHex(val)
+	if err != nil {
+		return nil, NewInvalidRequestError("Invalid hex string")
+	}
+
 	dst := keccak.Keccak256(nil, v)
 
-	return argBytes(dst), nil
+	return hex.EncodeToHex(dst), nil
 }

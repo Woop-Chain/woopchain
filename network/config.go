@@ -20,6 +20,7 @@ type Config struct {
 	MaxOutboundPeers int64                  // the maximum number of outbound peer connections
 	Chain            *chain.Chain           // the reference to the chain configuration
 	SecretsManager   secrets.SecretsManager // the secrets manager used for key storage
+	Metrics          *Metrics               // the metrics reporting reference
 }
 
 func DefaultConfig() *Config {

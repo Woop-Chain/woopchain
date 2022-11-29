@@ -1,8 +1,9 @@
 
 ## Woop Chain
 
-Woop Chain is an Ethereum-compatible blockchain.
+Woop Chain is a modular and extensible Ethereum-compatible blockchain network.
 
+To find out more about Woop Chain, visit the [official website](https://wikiwoop.com/).
 
 ## Documentation 📝
 

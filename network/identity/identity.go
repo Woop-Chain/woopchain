@@ -103,22 +103,25 @@ func (i *IdentityService) GetNotifyBundle() *network.NotifyBundle {
 			i.addPendingStatus(peerID, conn.Stat().Direction)
 
 			go func() {
-				eventType := event.PeerDialCompleted
+				connectEvent := &event.PeerEvent{
+					PeerID: peerID,
+					Type:   event.PeerDialCompleted,
+				}
 
 				if err := i.handleConnected(peerID, conn.Stat().Direction); err != nil {
 					// Close the connection to the peer
 					i.disconnectFromPeer(peerID, err.Error())
 
-					eventType = event.PeerFailedToConnect
+					connectEvent.Type = event.PeerFailedToConnect
 				}
 
 				// Mark the peer as no longer pending
-				i.removePendingStatus(peerID)
+				i.removePendingStatus(connectEvent.PeerID)
 
 				// Emit an adequate event
 				i.baseServer.EmitEvent(&event.PeerEvent{
-					PeerID: peerID,
-					Type:   eventType,
+					PeerID: connectEvent.PeerID,
+					Type:   connectEvent.Type,
 				})
 			}()
 		},

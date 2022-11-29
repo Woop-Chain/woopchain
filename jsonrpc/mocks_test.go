@@ -1,17 +1,19 @@
 package jsonrpc
 
 import (
+	"errors"
 	"math/big"
 	"sync"
 
 	"github.com/Woop-Chain/woopchain/blockchain"
+	"github.com/Woop-Chain/woopchain/state"
 	"github.com/Woop-Chain/woopchain/types"
 )
 
 type mockAccount struct {
 	address types.Address
 	code    []byte
-	account *Account
+	account *state.Account
 	storage map[types.Hash][]byte
 }
 
@@ -20,7 +22,9 @@ func (m *mockAccount) Storage(k types.Hash, v []byte) {
 }
 
 func (m *mockAccount) Code(code []byte) {
+	codeHash := types.BytesToHash(m.address.Bytes())
 	m.code = code
+	m.account.CodeHash = codeHash.Bytes()
 }
 
 func (m *mockAccount) Nonce(n uint64) {
@@ -48,39 +52,15 @@ type mockStore struct {
 	subscription *blockchain.MockSubscription
 	receiptsLock sync.Mutex
 	receipts     map[types.Hash][]*types.Receipt
-	accounts     map[types.Address]*Account
-
-	// headers is the list of historical headers
-	headers []*types.Header
+	accounts     map[types.Address]*state.Account
 }
 
 func newMockStore() *mockStore {
-	m := &mockStore{
+	return &mockStore{
 		header:       &types.Header{Number: 0},
 		subscription: blockchain.NewMockSubscription(),
-		accounts:     map[types.Address]*Account{},
+		accounts:     map[types.Address]*state.Account{},
 	}
-	m.addHeader(m.header)
-
-	return m
-}
-
-func (m *mockStore) addHeader(header *types.Header) {
-	if m.headers == nil {
-		m.headers = []*types.Header{}
-	}
-
-	m.headers = append(m.headers, header)
-}
-
-func (m *mockStore) headerLoop(cond func(h *types.Header) bool) *types.Header {
-	for _, header := range m.headers {
-		if cond(header) {
-			return header
-		}
-	}
-
-	return nil
 }
 
 func (m *mockStore) emitEvent(evnt *mockEvent) {
@@ -106,15 +86,15 @@ func (m *mockStore) emitEvent(evnt *mockEvent) {
 	m.subscription.Push(bEvnt)
 }
 
-func (m *mockStore) GetAccount(root types.Hash, addr types.Address) (*Account, error) {
+func (m *mockStore) GetAccount(root types.Hash, addr types.Address) (*state.Account, error) {
 	if acc, ok := m.accounts[addr]; ok {
 		return acc, nil
 	}
 
-	return nil, ErrStateNotFound
+	return nil, errors.New("given root and slot not found in storage")
 }
 
-func (m *mockStore) SetAccount(addr types.Address, account *Account) {
+func (m *mockStore) SetAccount(addr types.Address, account *state.Account) {
 	m.accounts[addr] = account
 }
 
@@ -136,19 +116,11 @@ func (m *mockStore) SubscribeEvents() blockchain.Subscription {
 }
 
 func (m *mockStore) GetBlockByHash(hash types.Hash, full bool) (*types.Block, bool) {
-	header := m.headerLoop(func(header *types.Header) bool {
-		return header.Hash == hash
-	})
-
-	return &types.Block{Header: header}, header != nil
+	return nil, false
 }
 
 func (m *mockStore) GetBlockByNumber(num uint64, full bool) (*types.Block, bool) {
-	header := m.headerLoop(func(header *types.Header) bool {
-		return header.Number == num
-	})
-
-	return &types.Block{Header: header}, header != nil
+	return nil, false
 }
 
 func (m *mockStore) GetTxs(inclQueued bool) (
@@ -160,8 +132,4 @@ func (m *mockStore) GetTxs(inclQueued bool) (
 
 func (m *mockStore) GetCapacity() (uint64, uint64) {
 	return 0, 0
-}
-
-func (m *mockStore) GetPeers() int {
-	return 20
 }

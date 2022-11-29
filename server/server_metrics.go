@@ -3,30 +3,36 @@ package server
 import (
 	"fmt"
 	"os"
-	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
+	"github.com/Woop-Chain/woopchain/consensus"
+	"github.com/Woop-Chain/woopchain/network"
+	"github.com/Woop-Chain/woopchain/txpool"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 	"gopkg.in/DataDog/dd-trace-go.v1/profiler"
 )
 
-func (s *Server) setupTelemetry() error {
-	inm := metrics.NewInmemSink(10*time.Second, time.Minute)
-	metrics.DefaultInmemSignal(inm)
+// serverMetrics holds the metric instances of all sub systems
+type serverMetrics struct {
+	consensus *consensus.Metrics
+	network   *network.Metrics
+	txpool    *txpool.Metrics
+}
 
-	promSink, err := prometheus.NewPrometheusSink()
-	if err != nil {
-		return err
+// metricProvider serverMetric instance for the given ChainID and nameSpace
+func metricProvider(nameSpace string, chainID string, metricsRequired bool) *serverMetrics {
+	if metricsRequired {
+		return &serverMetrics{
+			consensus: consensus.GetPrometheusMetrics(nameSpace, "chain_id", chainID),
+			network:   network.GetPrometheusMetrics(nameSpace, "chain_id", chainID),
+			txpool:    txpool.GetPrometheusMetrics(nameSpace, "chain_id", chainID),
+		}
 	}
 
-	metricsConf := metrics.DefaultConfig("edge")
-	metricsConf.EnableHostname = false
-	metrics.NewGlobal(metricsConf, metrics.FanoutSink{
-		inm, promSink,
-	})
-
-	return nil
+	return &serverMetrics{
+		consensus: consensus.NilMetrics(),
+		network:   network.NilMetrics(),
+		txpool:    txpool.NilMetrics(),
+	}
 }
 
 // enableDataDogProfiler enables DataDog profiler. Enable it by setting DD_ENABLE env var.
